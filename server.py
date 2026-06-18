@@ -5,9 +5,10 @@ import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from mcp.types import TextContent
+from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import Route, Mount
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -68,8 +69,6 @@ async def run_agent_tool(user_message: str, conversation_history: list = None) -
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if request.url.path in ("/health", "/"):
-            return await call_next(request)
         provided = request.headers.get("x-api-key") or ""
         if not provided:
             auth = request.headers.get("authorization", "")
@@ -84,9 +83,23 @@ async def health(_request):
     return JSONResponse({"status": "ok"})
 
 
-app = mcp.streamable_http_app()
-app.add_middleware(ApiKeyAuthMiddleware)
-app.routes.append(Route("/health", health))
+async def root(_request):
+    return JSONResponse({"service": "snaplogic-mcp-passthrough", "status": "ok"})
+
+
+# Build the MCP sub-app (with auth middleware)
+mcp_app = mcp.streamable_http_app()
+mcp_app.add_middleware(ApiKeyAuthMiddleware)
+
+# Outer app — /health and / are public; everything else goes through MCP (with auth)
+app = Starlette(
+    routes=[
+        Route("/health", health),
+        Route("/", root),
+        Mount("/", app=mcp_app),
+    ],
+    lifespan=mcp_app.router.lifespan_context,
+)
 
 
 if __name__ == "__main__":
