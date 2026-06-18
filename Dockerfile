@@ -1,13 +1,13 @@
-FROM python:3.12-slim
+FROM node:20-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY node-server/package*.json ./node-server/
+RUN cd node-server && npm install --omit=dev
 
-COPY server.py .
+COPY node-server ./node-server
 
-# Render injects its own PORT env var — server.py already reads PORT from environment
+ENV PORT=8000
 EXPOSE 8000
 
-CMD ["python", "server.py"]
+CMD ["node", "node-server/index.js"]
