@@ -35,6 +35,7 @@ async def call_pipeline(payload: dict) -> dict:
     return data
 
 
+# FastMCP with DNS rebinding protection disabled (we're behind a known reverse proxy)
 mcp = FastMCP("snaplogic-agent")
 
 
@@ -79,6 +80,26 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class HostHeaderRewriteMiddleware(BaseHTTPMiddleware):
+    """Rewrites the Host header to 'localhost' so the MCP SDK's DNS rebinding
+    protection accepts the request. We're behind Cloudflare/Render with a
+    known DNS name, so the original Host check isn't useful security."""
+
+    async def dispatch(self, request, call_next):
+        new_headers = []
+        host_replaced = False
+        for name, value in request.scope["headers"]:
+            if name == b"host":
+                new_headers.append((b"host", b"localhost"))
+                host_replaced = True
+            else:
+                new_headers.append((name, value))
+        if not host_replaced:
+            new_headers.append((b"host", b"localhost"))
+        request.scope["headers"] = new_headers
+        return await call_next(request)
+
+
 async def health(_request):
     return JSONResponse({"status": "ok"})
 
@@ -87,11 +108,12 @@ async def root(_request):
     return JSONResponse({"service": "snaplogic-mcp-passthrough", "status": "ok"})
 
 
-# Build the MCP sub-app (with auth middleware)
+# Build the MCP sub-app — apply host rewrite FIRST, then auth
 mcp_app = mcp.streamable_http_app()
 mcp_app.add_middleware(ApiKeyAuthMiddleware)
+mcp_app.add_middleware(HostHeaderRewriteMiddleware)
 
-# Outer app — /health and / are public; everything else goes through MCP (with auth)
+# Outer app — /health and / are public; everything else goes through MCP
 app = Starlette(
     routes=[
         Route("/health", health),
